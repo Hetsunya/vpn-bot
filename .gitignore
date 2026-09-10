@@ -1,0 +1,17 @@
+.env
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+vendor/
+.idea/
+.vscode/
+*.swp
+*.swo
+env describe.md
+roadmap.md
