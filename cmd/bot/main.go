@@ -38,10 +38,10 @@ func main() {
 	paymentRepo := repository.NewPaymentRepo(pool)
 	panelClient := panel.NewClient(cfg.PanelURL, cfg.PanelUsername, cfg.PanelPassword)
 	cryptoClient := crypto.NewClient(cfg.CryptoAPIURL, cfg.CryptoAPIToken)
-	subService := service.NewSubscriptionService(subRepo, serverRepo, panelClient)
+	subService := service.NewSubscriptionService(subRepo, serverRepo, panelClient, cfg.PanelSubPort, cfg.DefaultSubTrafficGB)
 	paymentService := service.NewPaymentService(paymentRepo, subService, cryptoClient)
 	expiredWorker := worker.NewExpiredWorker(subService, time.Hour)
-	telegramBot, err := bot.NewBot(cfg.BOTtoken, subService, paymentService, userRepo, serverRepo, cfg.AdminIDs)
+	telegramBot, err := bot.NewBot(cfg.BOTtoken, subService, paymentService, userRepo, serverRepo, cfg.AdminIDs, cfg.DefaultSubPrice, cfg.DefaultSubDurationDays)
 	if err != nil {
 		log.Fatal(err)
 	}

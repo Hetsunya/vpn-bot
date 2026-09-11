@@ -4,107 +4,110 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
-
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
+	"time"
 	"vpn-bot/internal/model"
 )
 
 type SubRepo interface {
 	Create(context.Context, *model.Subscription) error
 	GetByID(context.Context, string) (*model.Subscription, error)
+	GetLatestByUserID(context.Context, int64) (*model.Subscription, error)
+	GetByClientEmail(context.Context, string) (*model.Subscription, error)
+	GetBySubID(context.Context, string) (*model.Subscription, error)
 	GetActiveByUserID(context.Context, int64) ([]model.Subscription, error)
 	GetExpired(context.Context, time.Time) ([]model.Subscription, error)
 	Update(context.Context, *model.Subscription) error
 	Delete(context.Context, string) error
 	GetActiveCount(context.Context, time.Time) (int64, error)
 }
-
 type subRepo struct{ db *pgxpool.Pool }
 
-func NewSubRepo(db *pgxpool.Pool) SubRepo { return &subRepo{db: db} }
+func NewSubRepo(db *pgxpool.Pool) SubRepo { return &subRepo{db} }
 
-func (r *subRepo) Create(ctx context.Context, sub *model.Subscription) error {
-	_, err := r.db.Exec(ctx, `INSERT INTO subscriptions (id, user_tg_id, server_id, client_email, vless_uuid, expires_at, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7)`, sub.ID, sub.UserTgID, sub.ServerID, sub.ClientEmail, sub.VlessUUID, sub.ExpiresAt, sub.IsActive)
-	if err != nil {
-		return fmt.Errorf("create subscription: %w", err)
+const subscriptionColumns = `id,user_tg_id,server_id,client_email,panel_client_id,sub_id,subscription_url,expires_at,is_active`
+
+func (r *subRepo) Create(c context.Context, s *model.Subscription) error {
+	_, e := r.db.Exec(c, `INSERT INTO subscriptions (`+subscriptionColumns+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, s.ID, s.UserTgID, s.ServerID, s.ClientEmail, s.PanelClientID, s.SubID, s.SubscriptionURL, s.ExpiresAt, s.IsActive)
+	if e != nil {
+		return fmt.Errorf("create subscription: %w", e)
 	}
 	return nil
 }
-
-func (r *subRepo) GetByID(ctx context.Context, id string) (*model.Subscription, error) {
-	sub := &model.Subscription{}
-	err := r.db.QueryRow(ctx, `SELECT id, user_tg_id, server_id, client_email, vless_uuid, expires_at, is_active FROM subscriptions WHERE id = $1`, id).Scan(&sub.ID, &sub.UserTgID, &sub.ServerID, &sub.ClientEmail, &sub.VlessUUID, &sub.ExpiresAt, &sub.IsActive)
-	if errors.Is(err, pgx.ErrNoRows) {
+func (r *subRepo) GetByID(c context.Context, id string) (*model.Subscription, error) {
+	return r.one(c, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE id=$1`, id)
+}
+func (r *subRepo) GetLatestByUserID(c context.Context, id int64) (*model.Subscription, error) {
+	return r.one(c, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE user_tg_id=$1 ORDER BY is_active DESC,expires_at DESC LIMIT 1`, id)
+}
+func (r *subRepo) GetByClientEmail(c context.Context, v string) (*model.Subscription, error) {
+	return r.one(c, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE client_email=$1`, v)
+}
+func (r *subRepo) GetBySubID(c context.Context, v string) (*model.Subscription, error) {
+	return r.one(c, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE sub_id=$1`, v)
+}
+func (r *subRepo) one(c context.Context, q string, a any) (*model.Subscription, error) {
+	s := &model.Subscription{}
+	e := r.db.QueryRow(c, q, a).Scan(&s.ID, &s.UserTgID, &s.ServerID, &s.ClientEmail, &s.PanelClientID, &s.SubID, &s.SubscriptionURL, &s.ExpiresAt, &s.IsActive)
+	if errors.Is(e, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	if err != nil {
-		return nil, fmt.Errorf("get subscription: %w", err)
+	if e != nil {
+		return nil, fmt.Errorf("get subscription: %w", e)
 	}
-	return sub, nil
+	return s, nil
 }
-
-func (r *subRepo) GetActiveByUserID(ctx context.Context, userTgID int64) ([]model.Subscription, error) {
-	rows, err := r.db.Query(ctx, `SELECT id, user_tg_id, server_id, client_email, vless_uuid, expires_at, is_active FROM subscriptions WHERE user_tg_id = $1 AND is_active = TRUE AND expires_at > NOW() ORDER BY expires_at`, userTgID)
-	if err != nil {
-		return nil, fmt.Errorf("get active subscriptions: %w", err)
+func (r *subRepo) GetActiveByUserID(c context.Context, id int64) ([]model.Subscription, error) {
+	return r.many(c, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE user_tg_id=$1 AND is_active=TRUE AND expires_at>NOW() AND sub_id IS NOT NULL ORDER BY expires_at`, id)
+}
+func (r *subRepo) GetExpired(c context.Context, n time.Time) ([]model.Subscription, error) {
+	return r.many(c, `SELECT `+subscriptionColumns+` FROM subscriptions WHERE is_active=TRUE AND expires_at<=$1 ORDER BY expires_at`, n)
+}
+func (r *subRepo) many(c context.Context, q string, a any) ([]model.Subscription, error) {
+	rows, e := r.db.Query(c, q, a)
+	if e != nil {
+		return nil, fmt.Errorf("get subscriptions: %w", e)
 	}
 	defer rows.Close()
-	return scanSubscriptions(rows)
-}
-
-func (r *subRepo) GetExpired(ctx context.Context, now time.Time) ([]model.Subscription, error) {
-	rows, err := r.db.Query(ctx, `SELECT id, user_tg_id, server_id, client_email, vless_uuid, expires_at, is_active FROM subscriptions WHERE is_active = TRUE AND expires_at <= $1 ORDER BY expires_at`, now)
-	if err != nil {
-		return nil, fmt.Errorf("get expired subscriptions: %w", err)
-	}
-	defer rows.Close()
-	return scanSubscriptions(rows)
-}
-
-func (r *subRepo) Update(ctx context.Context, sub *model.Subscription) error {
-	result, err := r.db.Exec(ctx, `UPDATE subscriptions SET user_tg_id = $1, server_id = $2, client_email = $3, vless_uuid = $4, expires_at = $5, is_active = $6 WHERE id = $7`, sub.UserTgID, sub.ServerID, sub.ClientEmail, sub.VlessUUID, sub.ExpiresAt, sub.IsActive, sub.ID)
-	if err != nil {
-		return fmt.Errorf("update subscription: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-func (r *subRepo) Delete(ctx context.Context, id string) error {
-	result, err := r.db.Exec(ctx, `DELETE FROM subscriptions WHERE id = $1`, id)
-	if err != nil {
-		return fmt.Errorf("delete subscription: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-func (r *subRepo) GetActiveCount(ctx context.Context, now time.Time) (int64, error) {
-	var total int64
-	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM subscriptions WHERE is_active = TRUE AND expires_at > $1`, now).Scan(&total); err != nil {
-		return 0, fmt.Errorf("count active subscriptions: %w", err)
-	}
-	return total, nil
-}
-
-func scanSubscriptions(rows pgx.Rows) ([]model.Subscription, error) {
-	subscriptions := make([]model.Subscription, 0)
+	out := []model.Subscription{}
 	for rows.Next() {
-		var sub model.Subscription
-		if err := rows.Scan(&sub.ID, &sub.UserTgID, &sub.ServerID, &sub.ClientEmail, &sub.VlessUUID, &sub.ExpiresAt, &sub.IsActive); err != nil {
-			return nil, fmt.Errorf("scan subscription: %w", err)
+		var s model.Subscription
+		if e = rows.Scan(&s.ID, &s.UserTgID, &s.ServerID, &s.ClientEmail, &s.PanelClientID, &s.SubID, &s.SubscriptionURL, &s.ExpiresAt, &s.IsActive); e != nil {
+			return nil, fmt.Errorf("scan subscription: %w", e)
 		}
-		subscriptions = append(subscriptions, sub)
+		out = append(out, s)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate subscriptions: %w", err)
+	if e = rows.Err(); e != nil {
+		return nil, fmt.Errorf("iterate subscriptions: %w", e)
 	}
-	return subscriptions, nil
+	return out, nil
+}
+func (r *subRepo) Update(c context.Context, s *model.Subscription) error {
+	x, e := r.db.Exec(c, `UPDATE subscriptions SET user_tg_id=$1,server_id=$2,client_email=$3,panel_client_id=$4,sub_id=$5,subscription_url=$6,expires_at=$7,is_active=$8,updated_at=NOW() WHERE id=$9`, s.UserTgID, s.ServerID, s.ClientEmail, s.PanelClientID, s.SubID, s.SubscriptionURL, s.ExpiresAt, s.IsActive, s.ID)
+	if e != nil {
+		return fmt.Errorf("update subscription: %w", e)
+	}
+	if x.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+func (r *subRepo) Delete(c context.Context, id string) error {
+	x, e := r.db.Exec(c, `DELETE FROM subscriptions WHERE id=$1`, id)
+	if e != nil {
+		return fmt.Errorf("delete subscription: %w", e)
+	}
+	if x.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+func (r *subRepo) GetActiveCount(c context.Context, n time.Time) (int64, error) {
+	var x int64
+	e := r.db.QueryRow(c, `SELECT COUNT(*) FROM subscriptions WHERE is_active=TRUE AND expires_at>$1 AND sub_id IS NOT NULL`, n).Scan(&x)
+	if e != nil {
+		return 0, fmt.Errorf("count active subscriptions: %w", e)
+	}
+	return x, nil
 }

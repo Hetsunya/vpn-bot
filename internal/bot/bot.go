@@ -12,24 +12,27 @@ import (
 
 	"gopkg.in/telebot.v3"
 
+	"vpn-bot/internal/client/panel"
 	"vpn-bot/internal/model"
 	"vpn-bot/internal/repository"
 	"vpn-bot/internal/service"
 )
 
 type Bot struct {
-	tb         *telebot.Bot
-	subService *service.SubscriptionService
-	payService *service.PaymentService
-	userRepo   repository.UserRepo
-	serverRepo repository.ServerRepo
-	adminIDs   []int64
+	tb                  *telebot.Bot
+	subService          *service.SubscriptionService
+	payService          *service.PaymentService
+	userRepo            repository.UserRepo
+	serverRepo          repository.ServerRepo
+	adminIDs            []int64
+	defaultPrice        string
+	defaultDurationDays int
 
 	mu               sync.Mutex
 	waitingForServer map[int64]bool
 }
 
-func NewBot(token string, subService *service.SubscriptionService, payService *service.PaymentService, userRepo repository.UserRepo, serverRepo repository.ServerRepo, adminIDs []int64) (*Bot, error) {
+func NewBot(token string, subService *service.SubscriptionService, payService *service.PaymentService, userRepo repository.UserRepo, serverRepo repository.ServerRepo, adminIDs []int64, defaultPrice string, defaultDurationDays int) (*Bot, error) {
 	pref := telebot.Settings{
 		Token:  token,
 		Poller: &telebot.LongPoller{Timeout: 10 * time.Second},
@@ -38,7 +41,7 @@ func NewBot(token string, subService *service.SubscriptionService, payService *s
 	if err != nil {
 		return nil, fmt.Errorf("create telegram bot: %w", err)
 	}
-	return &Bot{tb: tb, subService: subService, payService: payService, userRepo: userRepo, serverRepo: serverRepo, adminIDs: adminIDs, waitingForServer: make(map[int64]bool)}, nil
+	return &Bot{tb: tb, subService: subService, payService: payService, userRepo: userRepo, serverRepo: serverRepo, adminIDs: adminIDs, defaultPrice: defaultPrice, defaultDurationDays: defaultDurationDays, waitingForServer: make(map[int64]bool)}, nil
 }
 
 func (b *Bot) Start() {
@@ -92,7 +95,7 @@ func (b *Bot) handleStart(c telebot.Context) error {
 
 func (b *Bot) handleBuy(c telebot.Context) error {
 	ctx := botContext(c)
-	payURL, err := b.payService.CreateInvoice(ctx, c.Sender().ID, "1.00", 30)
+	payURL, err := b.payService.CreateInvoice(ctx, c.Sender().ID, b.defaultPrice, b.defaultDurationDays)
 	if err != nil {
 		log.Printf("bot: create invoice for %d: %v", c.Sender().ID, err)
 		return c.Send("Ошибка создания платежа. Попробуйте позже.")
@@ -103,15 +106,32 @@ func (b *Bot) handleBuy(c telebot.Context) error {
 }
 
 func (b *Bot) handleMySub(c telebot.Context) error {
-	sub, vlessLink, err := b.subService.GetActiveSubscription(botContext(c), c.Sender().ID)
+	sub, traffic, err := b.subService.GetActiveSubscription(botContext(c), c.Sender().ID)
 	if err != nil || sub == nil {
 		if err != nil && !errors.Is(err, service.ErrNoActiveSubscription) {
 			log.Printf("bot: get subscription for %d: %v", c.Sender().ID, err)
 		}
 		return c.Send("У вас нет активной подписки. Используйте /buy для покупки.")
 	}
-	message := fmt.Sprintf("🔑 Ваша подписка активна до: %s\n\nСкопируйте ссылку ниже в ваше VPN-приложение:\n\n`%s`", sub.ExpiresAt.Format("02.01.2006 15:04"), vlessLink)
+	message := fmt.Sprintf("🔑 Ваша подписка активна до: %s\n\n📊 Трафик: %s\n\n🔗 Ссылка на подписку:\n`%s`\n\n💡 Скопируйте эту ссылку и добавьте её в ваше VPN-приложение:\n• Hiddify / HiddifyNG\n• v2rayNG (Android)\n• Streisand (iOS)\n• NekoBox", sub.ExpiresAt.Format("02.01.2006 15:04"), formatTraffic(traffic), sub.SubscriptionURL)
 	return c.Send(message, telebot.ModeMarkdown)
+}
+
+func formatTraffic(t *panel.ClientTraffic) string {
+	return formatBytes(t.Up+t.Down) + " / " + func() string {
+		if t.Total <= 0 {
+			return "∞"
+		}
+		return formatBytes(t.Total)
+	}()
+}
+func formatBytes(v int64) string {
+	const gb = int64(1024 * 1024 * 1024)
+	const mb = int64(1024 * 1024)
+	if v < gb {
+		return fmt.Sprintf("%.0f MB", float64(v)/float64(mb))
+	}
+	return fmt.Sprintf("%.2f GB", float64(v)/float64(gb))
 }
 
 func (b *Bot) isAdmin(tgID int64) bool {

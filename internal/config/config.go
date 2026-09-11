@@ -18,7 +18,9 @@ type Config struct {
 
 	DefaultSubPrice        string
 	DefaultSubDurationDays int
+	DefaultSubTrafficGB    int64
 	WebhookAddr            string
+	PanelSubPort           int
 
 	DBHost     string
 	DBPort     string
@@ -51,14 +53,16 @@ func Load() (*Config, error) {
 
 		DefaultSubPrice:        os.Getenv("DEFAULT_SUB_PRICE"),
 		DefaultSubDurationDays: envInt("DEFAULT_SUB_DURATION_DAYS", 30),
+		DefaultSubTrafficGB:    int64(envInt("DEFAULT_SUB_TRAFFIC_GB", 0)),
 		WebhookAddr:            envOrDefault("WEBHOOK_ADDR", ":8080"),
+		PanelSubPort:           envInt("PANEL_SUB_PORT", 2096),
 
 		DBHost:     os.Getenv("DB_HOST"),
 		DBPort:     os.Getenv("DB_PORT"),
 		DBUser:     os.Getenv("DB_USER"),
 		DBPassword: os.Getenv("DB_PASSWORD"),
 		DBName:     os.Getenv("DB_NAME"),
-		DBSSLMode:  os.Getenv("DB_SSL_MODE"),
+		DBSSLMode:  envFirst("DB_SSL_MODE", "DB_SSLMODE"),
 
 		PanelURL:       os.Getenv("PANEL_URL"),
 		PanelUsername:  os.Getenv("PANEL_USERNAME"),
@@ -89,7 +93,7 @@ func parseAdminIDs(value string) ([]int64, error) {
 
 func envInt(key string, fallback int) int {
 	value, err := strconv.Atoi(os.Getenv(key))
-	if err != nil || value <= 0 {
+	if err != nil || value < 0 {
 		return fallback
 	}
 	return value

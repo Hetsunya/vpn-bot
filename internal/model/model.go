@@ -21,13 +21,15 @@ type Server struct {
 }
 
 type Subscription struct {
-	ID          string    `db:"id"`
-	UserTgID    int64     `db:"user_tg_id"`
-	ServerID    int       `db:"server_id"`
-	ClientEmail string    `db:"client_email"`
-	VlessUUID   string    `db:"vless_uuid"`
-	ExpiresAt   time.Time `db:"expires_at"`
-	IsActive    bool      `db:"is_active"`
+	ID              string    `db:"id"`
+	UserTgID        int64     `db:"user_tg_id"`
+	ServerID        int       `db:"server_id"`
+	ClientEmail     string    `db:"client_email"`
+	PanelClientID   string    `db:"panel_client_id"`
+	SubID           string    `db:"sub_id"`
+	SubscriptionURL string    `db:"subscription_url"`
+	ExpiresAt       time.Time `db:"expires_at"`
+	IsActive        bool      `db:"is_active"`
 }
 
 type Payment struct {
