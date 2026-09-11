@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"net"
 	"net/url"
 	"time"
+
+	"github.com/google/uuid"
+
 	"vpn-bot/internal/client/panel"
 	"vpn-bot/internal/model"
 )
@@ -30,6 +32,7 @@ type PanelClient interface {
 	AddClientContext(context.Context, int, string, string, string, int64, int64) error
 	DeleteClientContext(context.Context, int, string) error
 	GetClientTrafficsContext(context.Context, string) (*panel.ClientTraffic, error)
+	GetAllInboundsContext(context.Context) ([]panel.Inbound, error) // <-- ДОБАВЬ ЭТУ СТРОКУ
 }
 type SubscriptionService struct {
 	subs         SubscriptionRepository
@@ -48,40 +51,93 @@ func (s *SubscriptionService) CreateSubscription(c context.Context, user int64, 
 		return "", fmt.Errorf("create subscription: duration must be positive")
 	}
 	now := s.now().UTC()
+
+	// Проверяем, есть ли уже активная подписка для продления
 	old, e := s.subs.GetLatestByUserID(c, user)
-	if e == nil {
+	if e == nil && old.IsActive {
 		base := old.ExpiresAt
 		if base.Before(now) {
 			base = now
 		}
 		old.ExpiresAt = base.AddDate(0, 0, days)
-		old.IsActive = true
-		if e = s.panel.AddClientContext(c, old.ServerID, old.ClientEmail, old.PanelClientID, old.SubID, old.ExpiresAt.UnixMilli(), s.trafficBytes); e != nil {
-			return "", fmt.Errorf("renew subscription: sync panel client: %w", e)
+
+		// Получаем все inbound'ы и продлеваем клиента в каждом
+		inbounds, err := s.panel.GetAllInboundsContext(c)
+		if err != nil {
+			return "", fmt.Errorf("renew subscription: get inbounds: %w", err)
 		}
+
+		for _, inbound := range inbounds {
+			if !inbound.Enable {
+				continue
+			}
+			if e = s.panel.AddClientContext(c, inbound.ID, old.ClientEmail, old.PanelClientID, old.SubID, old.ExpiresAt.UnixMilli(), s.trafficBytes); e != nil {
+				// Логируем ошибку, но продолжаем с другими inbound'ами
+				continue
+			}
+		}
+
 		if e = s.subs.Update(c, old); e != nil {
 			return "", fmt.Errorf("renew subscription: update subscription: %w", e)
 		}
 		return old.SubscriptionURL, nil
 	}
+
+	// Создаем новую подписку
 	server, e := s.servers.GetLeastLoaded(c)
 	if e != nil {
 		return "", fmt.Errorf("create subscription: get server: %w", e)
 	}
+
 	clientID := uuid.NewString()
 	subID := uuid.NewString()
 	email := fmt.Sprintf("sub_%d_%d", user, now.UnixNano())
 	exp := now.AddDate(0, 0, days)
+
 	link, e := BuildSubscriptionURL(server.PanelURL, s.subPort, subID)
 	if e != nil {
 		return "", fmt.Errorf("create subscription: build URL: %w", e)
 	}
-	if e = s.panel.AddClientContext(c, server.ID, email, clientID, subID, exp.UnixMilli(), s.trafficBytes); e != nil {
-		return "", fmt.Errorf("create subscription: add panel client: %w", e)
+
+	// Получаем все inbound'ы с сервера
+	inbounds, err := s.panel.GetAllInboundsContext(c)
+	if err != nil {
+		return "", fmt.Errorf("create subscription: get inbounds: %w", err)
 	}
-	sub := &model.Subscription{ID: uuid.NewString(), UserTgID: user, ServerID: server.ID, ClientEmail: email, PanelClientID: clientID, SubID: subID, SubscriptionURL: link, ExpiresAt: exp, IsActive: true}
+
+	if len(inbounds) == 0 {
+		return "", fmt.Errorf("create subscription: no inbounds found on server")
+	}
+
+	// Создаем клиента в каждом активном inbound'е
+	for _, inbound := range inbounds {
+		if !inbound.Enable {
+			continue
+		}
+		if e = s.panel.AddClientContext(c, inbound.ID, email, clientID, subID, exp.UnixMilli(), s.trafficBytes); e != nil {
+			// Логируем ошибку, но продолжаем с другими inbound'ами
+			continue
+		}
+	}
+
+	sub := &model.Subscription{
+		ID:              uuid.NewString(),
+		UserTgID:        user,
+		ServerID:        server.ID,
+		ClientEmail:     email,
+		PanelClientID:   clientID,
+		SubID:           subID,
+		SubscriptionURL: link,
+		ExpiresAt:       exp,
+		IsActive:        true,
+	}
 	if e = s.subs.Create(c, sub); e != nil {
-		_ = s.panel.DeleteClientContext(c, server.ID, email)
+		// При ошибке сохранения удаляем клиента из всех inbound'ов
+		for _, inbound := range inbounds {
+			if inbound.Enable {
+				_ = s.panel.DeleteClientContext(c, inbound.ID, email)
+			}
+		}
 		return "", fmt.Errorf("create subscription: save subscription: %w", e)
 	}
 	return link, nil
@@ -108,11 +164,26 @@ func (s *SubscriptionService) DisableExpiredSubscriptions(c context.Context) (in
 	if e != nil {
 		return 0, fmt.Errorf("disable expired subscriptions: %w", e)
 	}
+
+	// Получаем все inbound'ы один раз
+	inbounds, err := s.panel.GetAllInboundsContext(c)
+	if err != nil {
+		return 0, fmt.Errorf("disable expired subscriptions: get inbounds: %w", err)
+	}
+
 	n := 0
 	for i := range a {
-		if e = s.panel.DeleteClientContext(c, a[i].ServerID, a[i].ClientEmail); e != nil {
-			return n, fmt.Errorf("disable expired subscriptions: %w", e)
+		// Удаляем клиента из каждого активного inbound'а
+		for _, inbound := range inbounds {
+			if !inbound.Enable {
+				continue
+			}
+			if e = s.panel.DeleteClientContext(c, inbound.ID, a[i].ClientEmail); e != nil {
+				// Логируем ошибку, но продолжаем
+				continue
+			}
 		}
+
 		a[i].IsActive = false
 		if e = s.subs.Update(c, &a[i]); e != nil {
 			return n, fmt.Errorf("disable expired subscriptions: %w", e)
