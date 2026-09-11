@@ -109,7 +109,6 @@ func NewSubscriptionService(
 // ============================================================
 // CREATE / RENEW SUBSCRIPTION
 // ============================================================
-
 func (s *SubscriptionService) CreateSubscription(
 	c context.Context,
 	user int64,
@@ -123,27 +122,22 @@ func (s *SubscriptionService) CreateSubscription(
 
 	now := s.now().UTC()
 
-	old, err := s.subs.GetLatestByUserID(
-		c,
-		user,
-	)
+	old, err := s.subs.GetLatestByUserID(c, user)
 
 	// ========================================================
 	// EXISTING SUBSCRIPTION
 	// ========================================================
 
-	if err == nil && old.IsActive {
+	if err == nil {
 		base := old.ExpiresAt
 
+		// Если подписка уже закончилась —
+		// продлеваем от текущего момента.
 		if base.Before(now) {
 			base = now
 		}
 
-		newExpiry := base.AddDate(
-			0,
-			0,
-			days,
-		)
+		newExpiry := base.AddDate(0, 0, days)
 
 		inbounds, err := s.panel.GetAllInboundsContext(c)
 		if err != nil {
@@ -161,16 +155,16 @@ func (s *SubscriptionService) CreateSubscription(
 			)
 		}
 
-		// Проверяем, существует ли клиент в панели.
+		// Проверяем, существует ли клиент в 3x-ui.
 		_, panelErr := s.panel.GetClientContext(
 			c,
 			old.ClientEmail,
 		)
 
 		if panelErr != nil {
-			// В БД подписка есть, но клиента в панели нет.
+			// Клиента больше нет.
 			// Восстанавливаем его с теми же:
-			// email / UUID / sub_id.
+			// email / PanelClientID / SubID.
 			if err := s.panel.AddClientContext(
 				c,
 				inboundIDs,
@@ -186,6 +180,7 @@ func (s *SubscriptionService) CreateSubscription(
 				)
 			}
 		} else {
+			// Клиент существует — просто обновляем срок.
 			if err := s.panel.UpdateClientContext(
 				c,
 				old.ClientEmail,
@@ -198,6 +193,7 @@ func (s *SubscriptionService) CreateSubscription(
 				)
 			}
 
+			// Синхронизируем актуальные inbound'ы.
 			if err := s.panel.SyncClientInboundsContext(
 				c,
 				old.ClientEmail,
@@ -210,13 +206,11 @@ func (s *SubscriptionService) CreateSubscription(
 			}
 		}
 
+		// В любом случае подписка снова активна.
 		old.ExpiresAt = newExpiry
 		old.IsActive = true
 
-		if err := s.subs.Update(
-			c,
-			old,
-		); err != nil {
+		if err := s.subs.Update(c, old); err != nil {
 			return "", fmt.Errorf(
 				"renew subscription: update database: %w",
 				err,
@@ -263,11 +257,7 @@ func (s *SubscriptionService) CreateSubscription(
 		now.UnixNano(),
 	)
 
-	expiry := now.AddDate(
-		0,
-		0,
-		days,
-	)
+	expiry := now.AddDate(0, 0, days)
 
 	subscriptionURL, err := BuildSubscriptionURL(
 		server.PanelURL,
@@ -280,10 +270,6 @@ func (s *SubscriptionService) CreateSubscription(
 			err,
 		)
 	}
-
-	// ========================================================
-	// CREATE ONE CLIENT ON ALL ACTIVE INBOUNDS
-	// ========================================================
 
 	if err := s.panel.AddClientContext(
 		c,
@@ -312,15 +298,8 @@ func (s *SubscriptionService) CreateSubscription(
 		IsActive:        true,
 	}
 
-	if err := s.subs.Create(
-		c,
-		sub,
-	); err != nil {
-		// DB не сохранилась — откатываем клиента в панели.
-		_ = s.panel.DeleteClientContext(
-			c,
-			email,
-		)
+	if err := s.subs.Create(c, sub); err != nil {
+		_ = s.panel.DeleteClientContext(c, email)
 
 		return "", fmt.Errorf(
 			"create subscription: save subscription: %w",

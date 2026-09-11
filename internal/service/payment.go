@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -111,6 +112,12 @@ func (w *WebhookData) UnmarshalJSON(data []byte) error {
 }
 
 func (s *PaymentService) ProcessWebhook(ctx context.Context, webhookPayload WebhookData) error {
+	log.Printf(
+		"crypto webhook: invoice=%d status=%s payload=%s",
+		webhookPayload.InvoiceID,
+		webhookPayload.Status,
+		webhookPayload.Payload,
+	)
 	if webhookPayload.Status != "paid" {
 		return fmt.Errorf("process webhook: unsupported invoice status %q", webhookPayload.Status)
 	}
@@ -133,8 +140,16 @@ func (s *PaymentService) ProcessWebhook(ctx context.Context, webhookPayload Webh
 		return fmt.Errorf("process webhook: invalid invoice payload")
 	}
 	if _, err := s.subscriptions.CreateSubscription(ctx, payload.TgID, payload.DurationDays); err != nil {
+		log.Printf(
+			"crypto webhook: subscription activation failed: %v",
+			err,
+		)
 		return fmt.Errorf("process webhook: create subscription: %w", err)
 	}
+	log.Printf(
+		"crypto webhook: subscription activated for user=%d",
+		payload.TgID,
+	)
 	now := s.now().UTC()
 	payment.Status, payment.PaidAt = "paid", &now
 	if err := s.payments.Update(ctx, payment); err != nil {
