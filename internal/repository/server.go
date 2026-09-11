@@ -15,6 +15,7 @@ type ServerRepo interface {
 	Create(context.Context, *model.Server) error
 	GetByID(context.Context, int) (*model.Server, error)
 	GetAll(context.Context) ([]model.Server, error)
+	GetLeastLoaded(context.Context) (*model.Server, error)
 	Update(context.Context, *model.Server) error
 	Delete(context.Context, int) error
 }
@@ -61,6 +62,29 @@ func (r *serverRepo) GetAll(ctx context.Context) ([]model.Server, error) {
 		return nil, fmt.Errorf("iterate servers: %w", err)
 	}
 	return servers, nil
+}
+
+func (r *serverRepo) GetLeastLoaded(ctx context.Context) (*model.Server, error) {
+	server := &model.Server{}
+	err := r.db.QueryRow(ctx, `
+		SELECT s.id, s.name, s.panel_url, s.api_secret, s.is_active
+		FROM servers AS s
+		LEFT JOIN subscriptions AS sub
+			ON sub.server_id = s.id
+			AND sub.is_active = TRUE
+			AND sub.expires_at > NOW()
+		WHERE s.is_active = TRUE
+		GROUP BY s.id
+		ORDER BY COUNT(sub.id), s.id
+		LIMIT 1`,
+	).Scan(&server.ID, &server.Name, &server.PanelURL, &server.APISecret, &server.IsActive)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get least loaded server: %w", err)
+	}
+	return server, nil
 }
 
 func (r *serverRepo) Update(ctx context.Context, server *model.Server) error {

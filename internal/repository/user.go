@@ -16,6 +16,7 @@ type UserRepo interface {
 	GetByTgID(context.Context, int64) (*model.User, error)
 	Update(context.Context, *model.User) error
 	Delete(context.Context, int64) error
+	GetTotal(context.Context) (int64, error)
 }
 
 type userRepo struct{ db *pgxpool.Pool }
@@ -62,4 +63,12 @@ func (r *userRepo) Delete(ctx context.Context, tgID int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *userRepo) GetTotal(ctx context.Context) (int64, error) {
+	var total int64
+	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&total); err != nil {
+		return 0, fmt.Errorf("count users: %w", err)
+	}
+	return total, nil
 }

@@ -19,6 +19,7 @@ type SubRepo interface {
 	GetExpired(context.Context, time.Time) ([]model.Subscription, error)
 	Update(context.Context, *model.Subscription) error
 	Delete(context.Context, string) error
+	GetActiveCount(context.Context, time.Time) (int64, error)
 }
 
 type subRepo struct{ db *pgxpool.Pool }
@@ -83,6 +84,14 @@ func (r *subRepo) Delete(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *subRepo) GetActiveCount(ctx context.Context, now time.Time) (int64, error) {
+	var total int64
+	if err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM subscriptions WHERE is_active = TRUE AND expires_at > $1`, now).Scan(&total); err != nil {
+		return 0, fmt.Errorf("count active subscriptions: %w", err)
+	}
+	return total, nil
 }
 
 func scanSubscriptions(rows pgx.Rows) ([]model.Subscription, error) {
