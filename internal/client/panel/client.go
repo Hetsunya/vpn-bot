@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -253,24 +254,31 @@ func (c *Client) GetClientTraffics(email string) (*ClientTraffic, error) {
 
 func (c *Client) GetClientTrafficsContext(ctx context.Context, email string) (*ClientTraffic, error) {
 	if err := c.ensureAuth(ctx); err != nil {
-		return nil, fmt.Errorf("authenticate get traffics request: %w", err)
+		return nil, fmt.Errorf("authenticate get client traffics request: %w", err)
 	}
 
-	resp, err := c.sendGet(ctx, fmt.Sprintf("/panel/api/inbounds/getClientTraffics/%s", email))
+	// Modern 3x-ui API.
+	path := fmt.Sprintf("/panel/api/clients/traffic/%s", url.PathEscape(email))
+
+	resp, err := c.sendGet(ctx, path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get client traffics: %w", err)
 	}
 
+	// Session may have expired.
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		resp.Body.Close()
+
 		if err := c.LoginContext(ctx); err != nil {
 			return nil, fmt.Errorf("refresh panel session: %w", err)
 		}
-		resp, err = c.sendGet(ctx, fmt.Sprintf("/panel/api/inbounds/getClientTraffics/%s", email))
+
+		resp, err = c.sendGet(ctx, path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("get client traffics after re-login: %w", err)
 		}
 	}
+
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
@@ -278,7 +286,8 @@ func (c *Client) GetClientTrafficsContext(ctx context.Context, email string) (*C
 	}
 
 	var response struct {
-		Success bool `json:"success"`
+		Success bool   `json:"success"`
+		Msg     string `json:"msg"`
 		Obj     struct {
 			Up         int64 `json:"up"`
 			Down       int64 `json:"down"`
@@ -286,11 +295,13 @@ func (c *Client) GetClientTrafficsContext(ctx context.Context, email string) (*C
 			ExpiryTime int64 `json:"expiryTime"`
 		} `json:"obj"`
 	}
+
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("decode traffics response: %w", err)
+		return nil, fmt.Errorf("decode client traffics response: %w", err)
 	}
+
 	if !response.Success {
-		return nil, fmt.Errorf("get client traffics: unsuccessful response")
+		return nil, fmt.Errorf("get client traffics: %s", response.Msg)
 	}
 
 	return &ClientTraffic{
