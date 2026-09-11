@@ -386,6 +386,25 @@ func (c *Client) UpdateClientContext(
 	info.Client["totalGB"] = totalGB
 	info.Client["enable"] = true
 
+	if allowedIPs, ok := info.Client["allowedIPs"]; ok {
+		switch v := allowedIPs.(type) {
+		case string:
+			if strings.TrimSpace(v) == "" {
+				info.Client["allowedIPs"] = []string{}
+			} else {
+				var ips []string
+				if err := json.Unmarshal([]byte(v), &ips); err != nil {
+					return fmt.Errorf(
+						"parse allowedIPs: %w",
+						err,
+					)
+				}
+
+				info.Client["allowedIPs"] = ips
+			}
+		}
+	}
+
 	body, err := json.Marshal(info.Client)
 	if err != nil {
 		return fmt.Errorf(
