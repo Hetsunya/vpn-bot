@@ -86,6 +86,9 @@ func (b *Bot) Stop() {
 func (b *Bot) registerHandlers() {
 	b.tb.Use(b.registerUser)
 
+	// Административные команды.
+	b.tb.Handle("/admin", b.handleAdmin)
+
 	// Пользовательские команды.
 	b.tb.Handle("/start", b.handleStart)
 	b.tb.Handle("/cancel", b.handleCancel)
