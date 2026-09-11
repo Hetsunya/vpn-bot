@@ -31,10 +31,17 @@ type SubscriptionCreator interface {
 }
 
 type PaymentService struct {
-	payments      PaymentRepository
-	subscriptions SubscriptionCreator
-	crypto        CryptoClient
-	now           func() time.Time
+	payments         PaymentRepository
+	subscriptions    SubscriptionCreator
+	crypto           CryptoClient
+	now              func() time.Time
+	onPaymentSuccess func(int64) error
+}
+
+func (s *PaymentService) SetPaymentSuccessHandler(
+	handler func(int64) error,
+) {
+	s.onPaymentSuccess = handler
 }
 
 func NewPaymentService(payments PaymentRepository, subscriptions SubscriptionCreator, cryptoClient CryptoClient) *PaymentService {
@@ -152,8 +159,20 @@ func (s *PaymentService) ProcessWebhook(ctx context.Context, webhookPayload Webh
 	)
 	now := s.now().UTC()
 	payment.Status, payment.PaidAt = "paid", &now
+
 	if err := s.payments.Update(ctx, payment); err != nil {
 		return fmt.Errorf("process webhook: update payment: %w", err)
 	}
+
+	if s.onPaymentSuccess != nil {
+		if err := s.onPaymentSuccess(payload.TgID); err != nil {
+			log.Printf(
+				"crypto webhook: payment success notification for user=%d: %v",
+				payload.TgID,
+				err,
+			)
+		}
+	}
+
 	return nil
 }

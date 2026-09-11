@@ -45,6 +45,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	paymentService.SetPaymentSuccessHandler(
+		telegramBot.SendMySubscription,
+	)
 	webhookServer := bot.NewWebhookServer(cfg.WebhookAddr, paymentService)
 	go expiredWorker.Start(appCtx)
 

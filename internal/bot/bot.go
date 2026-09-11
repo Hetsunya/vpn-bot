@@ -900,3 +900,67 @@ func parseServerInput(text string) (
 
 	return name, panelURL, password, nil
 }
+
+func (b *Bot) SendMySubscription(tgID int64) error {
+	sub, traffic, err := b.subService.GetActiveSubscription(
+		context.Background(),
+		tgID,
+	)
+	if err != nil {
+		return fmt.Errorf("get subscription for %d: %w", tgID, err)
+	}
+
+	message := fmt.Sprintf(
+		`🔑 <b>Моя подписка</b>
+
+🟢 Статус: <b>активна</b>
+
+📅 Действует до:
+<b>%s</b>
+
+📊 Трафик:
+<b>%s</b>
+
+🔗 <b>Ссылка на подписку:</b>
+
+<code>%s</code>
+
+💡 Скопируйте ссылку и добавьте её в ваше VPN-приложение:
+
+• Hiddify / HiddifyNG
+• v2rayNG (Android)
+• Streisand (iOS)
+• NekoBox`,
+		sub.ExpiresAt.Format("02.01.2006 15:04"),
+		formatTraffic(traffic),
+		sub.SubscriptionURL,
+	)
+
+	markup := &telebot.ReplyMarkup{}
+
+	markup.Inline(
+		markup.Row(
+			markup.Data("🔄 Обновить", "refresh_sub"),
+		),
+		markup.Row(
+			markup.Data("🛒 Продлить подписку", "buy"),
+		),
+		markup.Row(
+			markup.Data("🏠 Главное меню", "back_main"),
+		),
+	)
+
+	_, err = b.tb.Send(
+		&telebot.Chat{ID: tgID},
+		message,
+		&telebot.SendOptions{
+			ParseMode: telebot.ModeHTML,
+		},
+		markup,
+	)
+	if err != nil {
+		return fmt.Errorf("send subscription to %d: %w", tgID, err)
+	}
+
+	return nil
+}
