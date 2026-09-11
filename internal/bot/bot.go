@@ -557,13 +557,13 @@ func (b *Bot) handleAbout(c telebot.Context) error {
 		markup.Row(
 			markup.URL(
 				"📄 Политика конфиденциальности",
-				"https://telegra.ph/Politika-konfidencialnosti-11-23-30",
+				"https://telegra.ph/Politika-konfidencialnosti-09-11-54",
 			),
 		),
 		markup.Row(
 			markup.URL(
 				"📄 Пользовательское соглашение",
-				"https://telegra.ph/Polzovatelskoe-soglashenie-02-11-46",
+				"https://telegra.ph/Polzovatelskoe-soglashenie-09-11-25",
 			),
 		),
 		markup.Row(
