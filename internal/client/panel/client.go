@@ -382,18 +382,95 @@ func (c *Client) UpdateClientContext(
 		)
 	}
 
-	info.Client["expiryTime"] = expiryTimeMs
-	info.Client["totalGB"] = totalGB
-	info.Client["enable"] = true
+	if info == nil || info.Client == nil {
+		return fmt.Errorf(
+			"get existing client before update: empty client",
+		)
+	}
 
+	// --------------------------------------------------------
+	// 3x-ui UPDATE принимает полный объект клиента.
+	//
+	// GET /clients/get/:email возвращает часть полей в типах,
+	// которые не совпадают с типами UPDATE API.
+	//
+	// В частности:
+	//   id         -> GET может вернуть number, UPDATE ждёт string
+	//   allowedIPs -> GET может вернуть string, UPDATE ждёт []string
+	// --------------------------------------------------------
+
+	// ID клиента.
+	//
+	// json.Decoder в map[string]interface{} декодирует JSON number
+	// в float64. Перед UPDATE 3x-ui ожидает id как string.
+	if id, ok := info.Client["id"]; ok {
+		switch v := id.(type) {
+		case float64:
+			info.Client["id"] = fmt.Sprintf("%.0f", v)
+
+		case float32:
+			info.Client["id"] = fmt.Sprintf("%.0f", v)
+
+		case int:
+			info.Client["id"] = fmt.Sprintf("%d", v)
+
+		case int8:
+			info.Client["id"] = fmt.Sprintf("%d", v)
+
+		case int16:
+			info.Client["id"] = fmt.Sprintf("%d", v)
+
+		case int32:
+			info.Client["id"] = fmt.Sprintf("%d", v)
+
+		case int64:
+			info.Client["id"] = fmt.Sprintf("%d", v)
+
+		case uint:
+			info.Client["id"] = fmt.Sprintf("%d", v)
+
+		case uint8:
+			info.Client["id"] = fmt.Sprintf("%d", v)
+
+		case uint16:
+			info.Client["id"] = fmt.Sprintf("%d", v)
+
+		case uint32:
+			info.Client["id"] = fmt.Sprintf("%d", v)
+
+		case uint64:
+			info.Client["id"] = fmt.Sprintf("%d", v)
+
+		case json.Number:
+			info.Client["id"] = v.String()
+
+		case string:
+			// Уже правильный тип.
+		}
+	}
+
+	// allowedIPs.
+	//
+	// В некоторых версиях 3x-ui GET возвращает это поле строкой:
+	//   ""
+	// или:
+	//   "[\"1.2.3.4\"]"
+	//
+	// UPDATE ожидает настоящий JSON-массив строк.
 	if allowedIPs, ok := info.Client["allowedIPs"]; ok {
 		switch v := allowedIPs.(type) {
 		case string:
-			if strings.TrimSpace(v) == "" {
+			value := strings.TrimSpace(v)
+
+			if value == "" {
 				info.Client["allowedIPs"] = []string{}
 			} else {
 				var ips []string
-				if err := json.Unmarshal([]byte(v), &ips); err != nil {
+
+				if err := json.Unmarshal(
+					[]byte(value),
+					&ips,
+				); err != nil {
 					return fmt.Errorf(
 						"parse allowedIPs: %w",
 						err,
@@ -402,8 +479,34 @@ func (c *Client) UpdateClientContext(
 
 				info.Client["allowedIPs"] = ips
 			}
+
+		case nil:
+			info.Client["allowedIPs"] = []string{}
+
+		case []interface{}:
+			ips := make([]string, 0, len(v))
+
+			for _, item := range v {
+				switch value := item.(type) {
+				case string:
+					ips = append(ips, value)
+
+				default:
+					return fmt.Errorf(
+						"parse allowedIPs: expected string item, got %T",
+						item,
+					)
+				}
+			}
+
+			info.Client["allowedIPs"] = ips
 		}
 	}
+
+	// Меняем только поля, которые действительно должны измениться.
+	info.Client["expiryTime"] = expiryTimeMs
+	info.Client["totalGB"] = totalGB
+	info.Client["enable"] = true
 
 	body, err := json.Marshal(info.Client)
 	if err != nil {
@@ -978,6 +1081,7 @@ func (c *Client) doJSONWithRetry(
 
 	if resp.StatusCode < http.StatusOK ||
 		resp.StatusCode >= http.StatusMultipleChoices {
+
 		return responseError(
 			"panel request",
 			resp,
@@ -1004,7 +1108,9 @@ func (c *Client) doJSONWithRetry(
 			)
 		}
 
-		return fmt.Errorf("panel request failed")
+		return fmt.Errorf(
+			"panel request failed",
+		)
 	}
 
 	return nil
