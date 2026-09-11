@@ -959,11 +959,33 @@ func (c *Client) doJSONWithRetry(
 
 	if resp.StatusCode < http.StatusOK ||
 		resp.StatusCode >= http.StatusMultipleChoices {
-
 		return responseError(
 			"panel request",
 			resp,
 		)
+	}
+
+	var result struct {
+		Success bool   `json:"success"`
+		Message string `json:"msg"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf(
+			"decode panel response: %w",
+			err,
+		)
+	}
+
+	if !result.Success {
+		if result.Message != "" {
+			return fmt.Errorf(
+				"panel request failed: %s",
+				result.Message,
+			)
+		}
+
+		return fmt.Errorf("panel request failed")
 	}
 
 	return nil
